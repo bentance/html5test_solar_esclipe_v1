@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Solar Eclipse Simulation with Time Control</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: Arial, sans-serif;}
+        canvas { display: block; width: 100%; height: 100%; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-size: 14px;
+            z-index: 100;
+        }
+        #controls-container {
+            position: absolute;
+            top: 50%;
+            right: 20px;
+            transform: translateY(-50%); /* Center vertically */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: rgba(50, 50, 50, 0.7); /* Semi-transparent background */
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 100;
+        }
+        #time-slider {
+            /* Style the slider vertically */
+            writing-mode: bt-lr; /* Bottom to top */
+            -webkit-appearance: slider-vertical; /* WebKit */
+            appearance: slider-vertical; /* Standard */
+            width: 8px; /* Thickness of the slider */
+            height: 150px; /* Length of the slider */
+            cursor: pointer;
+            margin-top: 10px; /* Space below label */
+        }
+        #slider-label {
+            color: white;
+            font-size: 12px;
+            margin-bottom: 5px; /* Space above slider */
+        }
+         #speed-value {
+            color: white;
+            font-size: 12px;
+            margin-top: 10px; /* Space below slider */
+            min-width: 30px; /* Ensure space for value */
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Left-click drag: Rotate | Right-click drag: Pan | Scroll: Zoom | Use slider for speed</div>
+
+    <div id="controls-container">
+        <label id="slider-label" for="time-slider">Speed</label>
+        <input type="range" id="time-slider" min="0" max="100" value="50">
+         <span id="speed-value">50</span> </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        let scene, camera, renderer, controls;
+        let sun, earth, moon;
+        let earthOrbitRadius = 150; // Distance from Sun to Earth
+        let moonOrbitRadius = 15;  // Distance from Earth to Moon
+        // Define base speed in radians per second (at slider = 100) - Increased by 3x
+        let baseMoonOrbitSpeed = 1.5; // Was 0.5, now 1.5 for 3x speed
+        let currentMoonOrbitSpeed = baseMoonOrbitSpeed * 0.5; // Initial speed (slider at 50)
+        let moonOrbitLine; // Reference to the moon's orbit line mesh
+        let timeSlider, speedValueDisplay; // References to slider and display elements
+        let moonAngle = 0; // Current angle of the moon in its orbit (radians)
+
+        // Initialize the scene, camera, renderer, and controls
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 80, 200);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true; // Ensure shadows are enabled
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Use soft shadows
+            // Disable physically correct lights for simpler brightness control
+            renderer.physicallyCorrectLights = false;
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting
+            // Ambient light - Provides overall base lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // Intensity 0.7
+            scene.add(ambientLight);
+
+            // Point light simulating the Sun's light - Moderate intensity, linear falloff
+            // Decay = 1 means linear falloff
+            const sunLight = new THREE.PointLight(0xffffff, 1.2, 2000, 1); // Intensity 1.2, decay 1
+            sunLight.position.set(0, 0, 0); // Position at the Sun's center
+            sunLight.castShadow = true; // Ensure the light source casts shadows
+            // Configure shadow properties
+            sunLight.shadow.mapSize.width = 2048; // Higher resolution shadows
+            sunLight.shadow.mapSize.height = 2048;
+            // Adjust shadow camera frustum to better encompass the scene elements
+            sunLight.shadow.camera.near = 10;
+            sunLight.shadow.camera.far = 400; // Ensure this covers the Earth/Moon orbit
+            sunLight.shadow.bias = -0.005; // Adjusted bias slightly, helps prevent shadow acne
+            scene.add(sunLight);
+
+            // Optional: Add a shadow camera helper for debugging (uncomment to see)
+            // const shadowHelper = new THREE.CameraHelper(sunLight.shadow.camera);
+            // scene.add(shadowHelper);
+
+            // Create celestial bodies
+            createSun();
+            createEarth();
+            createMoon();
+
+            // Create orbit lines
+            createEarthOrbitLine();
+            createMoonOrbitLine();
+
+            // Add OrbitControls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 30;
+            controls.maxDistance = 600;
+
+            // Get slider element and add event listener
+            timeSlider = document.getElementById('time-slider');
+            speedValueDisplay = document.getElementById('speed-value');
+            timeSlider.addEventListener('input', onSpeedChange);
+            // Set initial speed display
+            speedValueDisplay.textContent = timeSlider.value;
+
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        // Create the Sun sphere
+        function createSun() {
+            const sunGeometry = new THREE.SphereGeometry(20, 64, 64);
+            // Use MeshBasicMaterial for the sun as it doesn't need external light and should always be bright
+            const sunMaterial = new THREE.MeshBasicMaterial({
+                color: 0xffff00, // Bright yellow
+                wireframe: false
+            });
+            sun = new THREE.Mesh(sunGeometry, sunMaterial);
+            sun.position.set(0, 0, 0);
+            scene.add(sun);
+        }
+
+        // Create the Earth sphere
+        function createEarth() {
+            const earthGeometry = new THREE.SphereGeometry(5, 32, 32);
+            // Use MeshStandardMaterial for realistic lighting interaction
+            const earthMaterial = new THREE.MeshStandardMaterial({
+                color: 0x87CEEB, // Sky Blue color
+                roughness: 0.8,
+                metalness: 0.1 // Reduced metalness for less shine
+             });
+            earth = new THREE.Mesh(earthGeometry, earthMaterial);
+            earth.position.x = earthOrbitRadius; // Position relative to Sun
+            earth.castShadow = false; // Earth doesn't need to cast shadows
+            earth.receiveShadow = true; // Earth *must* receive shadows from the Moon
+            scene.add(earth);
+        }
+
+        // Create the Moon sphere
+        function createMoon() {
+            const moonGeometry = new THREE.SphereGeometry(1.5, 32, 32);
+            // Use MeshStandardMaterial for realistic lighting interaction
+            const moonMaterial = new THREE.MeshStandardMaterial({
+                color: 0xD3D3D3, // Light Grey color
+                roughness: 0.9,
+                metalness: 0.1 // Reduced metalness
+            });
+            moon = new THREE.Mesh(moonGeometry, moonMaterial);
+            moon.castShadow = true;    // Moon *must* cast the eclipse shadow
+            moon.receiveShadow = false; // Moon doesn't need to receive shadows
+            // Initial position will be set in the first frame of animate()
+            scene.add(moon);
+        }
+
+        // Create the Earth's orbit line
+        function createEarthOrbitLine() {
+            const points = [];
+            const segments = 128;
+            for (let i = 0; i <= segments; i++) {
+                const theta = (i / segments) * Math.PI * 2;
+                points.push(new THREE.Vector3(Math.cos(theta) * earthOrbitRadius, 0, Math.sin(theta) * earthOrbitRadius));
+            }
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({ color: 0xcccccc, transparent: true, opacity: 0.4 });
+            const orbitLine = new THREE.Line(geometry, material);
+            scene.add(orbitLine);
+        }
+
+        // Create the Moon's orbit line
+        function createMoonOrbitLine() {
+            const points = [];
+            const segments = 64;
+            for (let i = 0; i <= segments; i++) {
+                const theta = (i / segments) * Math.PI * 2;
+                // Create points relative to Earth's initial position
+                points.push(new THREE.Vector3(
+                    earth.position.x + Math.cos(theta) * moonOrbitRadius,
+                    earth.position.y,
+                    earth.position.z + Math.sin(theta) * moonOrbitRadius
+                ));
+            }
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.5 });
+            moonOrbitLine = new THREE.Line(geometry, material);
+            scene.add(moonOrbitLine);
+        }
+
+        // Handle speed slider changes
+        function onSpeedChange() {
+            const sliderValue = parseFloat(timeSlider.value);
+            // Map slider value (0-100) to speed (0 - baseMoonOrbitSpeed radians/sec)
+            currentMoonOrbitSpeed = baseMoonOrbitSpeed * (sliderValue / 100);
+            // Update the displayed speed value
+            speedValueDisplay.textContent = sliderValue.toFixed(0);
+        }
+
+
+        // Handle window resize events
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        let lastTimestamp = 0;
+        // Animation loop
+        function animate(timestamp) {
+            requestAnimationFrame(animate); // Request the next frame
+
+            // Ensure lastTimestamp is initialized on the first frame
+            if (lastTimestamp === 0) {
+                lastTimestamp = timestamp;
+                return; // Skip the first frame calculation
+            }
+
+            // Calculate delta time for smooth animation regardless of frame rate
+            const deltaTime = (timestamp - lastTimestamp) * 0.001; // Convert ms to seconds
+            lastTimestamp = timestamp;
+
+            // Update moon angle based on current speed and delta time
+            if (currentMoonOrbitSpeed > 0 && deltaTime > 0) {
+                 moonAngle += currentMoonOrbitSpeed * deltaTime;
+            }
+
+            // Update controls if damping is enabled
+            controls.update();
+
+            // Animate Moon's orbit around Earth using the updated moonAngle
+            moon.position.x = earth.position.x + Math.cos(moonAngle) * moonOrbitRadius;
+            moon.position.z = earth.position.z + Math.sin(moonAngle) * moonOrbitRadius;
+            moon.position.y = earth.position.y; // Keep Moon vertically aligned with Earth
+
+
+            // Render the scene
+            renderer.render(scene, camera);
+        }
+
+        // Start the simulation when the window is loaded
+        window.onload = function() {
+            init();
+            animate(0); // Start the animation loop
+        };
+    </script>
+</body>
+</html>
