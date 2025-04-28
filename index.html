@@ -51,15 +51,33 @@
             min-width: 30px; /* Ensure space for value */
             text-align: center;
         }
+        #pause-button {
+            background-color: #4CAF50; /* Green */
+            border: none;
+            color: white;
+            padding: 8px 12px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 15px; /* Space above button */
+            width: 70px; /* Fixed width */
+        }
+        #pause-button:hover {
+            background-color: #45a049;
+        }
     </style>
 </head>
 <body>
-    <div id="info">Left-click drag: Rotate | Right-click drag: Pan | Scroll: Zoom | Use slider for speed</div>
+    <div id="info">Left-click drag: Rotate | Right-click drag: Pan | Scroll: Zoom | Use slider/button for speed/pause</div>
 
     <div id="controls-container">
         <label id="slider-label" for="time-slider">Speed</label>
         <input type="range" id="time-slider" min="0" max="100" value="50">
-         <span id="speed-value">50</span> </div>
+         <span id="speed-value">50</span>
+         <button id="pause-button">Pause</button> </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -69,11 +87,13 @@
         let earthOrbitRadius = 150; // Distance from Sun to Earth
         let moonOrbitRadius = 15;  // Distance from Earth to Moon
         // Define base speed in radians per second (at slider = 100) - Increased by 3x
-        let baseMoonOrbitSpeed = 1.5; // Was 0.5, now 1.5 for 3x speed
+        let baseMoonOrbitSpeed = 1.5; // 3x speed
         let currentMoonOrbitSpeed = baseMoonOrbitSpeed * 0.5; // Initial speed (slider at 50)
         let moonOrbitLine; // Reference to the moon's orbit line mesh
-        let timeSlider, speedValueDisplay; // References to slider and display elements
+        let timeSlider, speedValueDisplay, pauseButton; // References to control elements
         let moonAngle = 0; // Current angle of the moon in its orbit (radians)
+        let isPaused = false; // State variable for pause
+        let speedBeforePause = 50; // Store slider value before pausing
 
         // Initialize the scene, camera, renderer, and controls
         function init() {
@@ -107,15 +127,11 @@
             // Configure shadow properties
             sunLight.shadow.mapSize.width = 2048; // Higher resolution shadows
             sunLight.shadow.mapSize.height = 2048;
-            // Adjust shadow camera frustum to better encompass the scene elements
-            sunLight.shadow.camera.near = 10;
-            sunLight.shadow.camera.far = 400; // Ensure this covers the Earth/Moon orbit
-            sunLight.shadow.bias = -0.005; // Adjusted bias slightly, helps prevent shadow acne
+            // Adjust shadow camera frustum
+            sunLight.shadow.camera.near = 1; // Reduced near plane to capture objects closer to the light
+            sunLight.shadow.camera.far = 500; // Increased far plane slightly
+            sunLight.shadow.bias = -0.001; // Adjusted bias, smaller value might help prevent shadow detachment
             scene.add(sunLight);
-
-            // Optional: Add a shadow camera helper for debugging (uncomment to see)
-            // const shadowHelper = new THREE.CameraHelper(sunLight.shadow.camera);
-            // scene.add(shadowHelper);
 
             // Create celestial bodies
             createSun();
@@ -134,12 +150,17 @@
             controls.minDistance = 30;
             controls.maxDistance = 600;
 
-            // Get slider element and add event listener
+            // Get control elements and add event listeners
             timeSlider = document.getElementById('time-slider');
             speedValueDisplay = document.getElementById('speed-value');
+            pauseButton = document.getElementById('pause-button'); // Get button reference
+
             timeSlider.addEventListener('input', onSpeedChange);
-            // Set initial speed display
+            pauseButton.addEventListener('click', togglePause); // Add click listener
+
+            // Set initial speed display and button text
             speedValueDisplay.textContent = timeSlider.value;
+            updatePauseButtonText();
 
 
             // Handle window resize
@@ -149,11 +170,7 @@
         // Create the Sun sphere
         function createSun() {
             const sunGeometry = new THREE.SphereGeometry(20, 64, 64);
-            // Use MeshBasicMaterial for the sun as it doesn't need external light and should always be bright
-            const sunMaterial = new THREE.MeshBasicMaterial({
-                color: 0xffff00, // Bright yellow
-                wireframe: false
-            });
+            const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, wireframe: false });
             sun = new THREE.Mesh(sunGeometry, sunMaterial);
             sun.position.set(0, 0, 0);
             scene.add(sun);
@@ -162,32 +179,21 @@
         // Create the Earth sphere
         function createEarth() {
             const earthGeometry = new THREE.SphereGeometry(5, 32, 32);
-            // Use MeshStandardMaterial for realistic lighting interaction
-            const earthMaterial = new THREE.MeshStandardMaterial({
-                color: 0x87CEEB, // Sky Blue color
-                roughness: 0.8,
-                metalness: 0.1 // Reduced metalness for less shine
-             });
+            const earthMaterial = new THREE.MeshStandardMaterial({ color: 0x87CEEB, roughness: 0.8, metalness: 0.1 });
             earth = new THREE.Mesh(earthGeometry, earthMaterial);
-            earth.position.x = earthOrbitRadius; // Position relative to Sun
-            earth.castShadow = false; // Earth doesn't need to cast shadows
-            earth.receiveShadow = true; // Earth *must* receive shadows from the Moon
+            earth.position.x = earthOrbitRadius;
+            earth.castShadow = false;
+            earth.receiveShadow = true;
             scene.add(earth);
         }
 
         // Create the Moon sphere
         function createMoon() {
             const moonGeometry = new THREE.SphereGeometry(1.5, 32, 32);
-            // Use MeshStandardMaterial for realistic lighting interaction
-            const moonMaterial = new THREE.MeshStandardMaterial({
-                color: 0xD3D3D3, // Light Grey color
-                roughness: 0.9,
-                metalness: 0.1 // Reduced metalness
-            });
+            const moonMaterial = new THREE.MeshStandardMaterial({ color: 0xD3D3D3, roughness: 0.9, metalness: 0.1 });
             moon = new THREE.Mesh(moonGeometry, moonMaterial);
-            moon.castShadow = true;    // Moon *must* cast the eclipse shadow
-            moon.receiveShadow = false; // Moon doesn't need to receive shadows
-            // Initial position will be set in the first frame of animate()
+            moon.castShadow = true;
+            moon.receiveShadow = false;
             scene.add(moon);
         }
 
@@ -211,7 +217,6 @@
             const segments = 64;
             for (let i = 0; i <= segments; i++) {
                 const theta = (i / segments) * Math.PI * 2;
-                // Create points relative to Earth's initial position
                 points.push(new THREE.Vector3(
                     earth.position.x + Math.cos(theta) * moonOrbitRadius,
                     earth.position.y,
@@ -231,6 +236,50 @@
             currentMoonOrbitSpeed = baseMoonOrbitSpeed * (sliderValue / 100);
             // Update the displayed speed value
             speedValueDisplay.textContent = sliderValue.toFixed(0);
+
+            // If user moves slider away from 0, unpause
+            if (sliderValue > 0 && isPaused) {
+                isPaused = false;
+                speedBeforePause = sliderValue; // Update speed before pause
+                updatePauseButtonText();
+            } else if (sliderValue === 0 && !isPaused) {
+                 // If user moves slider to 0 manually, treat as pause
+                 isPaused = true;
+                 speedBeforePause = 1; // Set a minimal speed to resume to if paused at 0
+                 updatePauseButtonText();
+            } else if (sliderValue > 0 && !isPaused) {
+                 // Store the current speed if not paused and slider is not 0
+                 speedBeforePause = sliderValue;
+            }
+        }
+
+        // Toggle pause state
+        function togglePause() {
+            isPaused = !isPaused;
+            if (isPaused) {
+                // Store current speed only if it's not already 0
+                if (parseFloat(timeSlider.value) > 0) {
+                    speedBeforePause = parseFloat(timeSlider.value);
+                } else {
+                    // If already at 0, set a default resume speed (e.g., 1)
+                    speedBeforePause = 1;
+                }
+                // Set slider and speed to 0
+                timeSlider.value = 0;
+                currentMoonOrbitSpeed = 0;
+                speedValueDisplay.textContent = '0';
+            } else {
+                // Restore previous speed
+                timeSlider.value = speedBeforePause;
+                currentMoonOrbitSpeed = baseMoonOrbitSpeed * (speedBeforePause / 100);
+                speedValueDisplay.textContent = speedBeforePause.toFixed(0);
+            }
+            updatePauseButtonText();
+        }
+
+        // Update pause button text based on state
+        function updatePauseButtonText() {
+            pauseButton.textContent = isPaused ? 'Resume' : 'Pause';
         }
 
 
@@ -257,6 +306,7 @@
             lastTimestamp = timestamp;
 
             // Update moon angle based on current speed and delta time
+            // No need to check isPaused here, as currentMoonOrbitSpeed will be 0 if paused
             if (currentMoonOrbitSpeed > 0 && deltaTime > 0) {
                  moonAngle += currentMoonOrbitSpeed * deltaTime;
             }
